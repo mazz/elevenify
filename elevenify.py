@@ -8,13 +8,14 @@ from dotenv import load_dotenv
 from pydub import AudioSegment
 import io
 
-def load_api_key(args):
-    """Load ElevenLabs API key from .env file or command-line argument."""
+def load_api_key_and_url(args):
+    """Load ElevenLabs API key and URL from .env file or command-line argument."""
     load_dotenv()
     api_key = args.key or os.getenv("LABSKEY")
     if not api_key:
         raise ValueError("API key must be provided via --key or LABSKEY in .env file")
-    return api_key
+    api_url = os.getenv("LABSURL", "https://api.elevenlabs.io")
+    return api_key, api_url
 
 def list_voices(client):
     """List available ElevenLabs voices with their IDs."""
@@ -281,9 +282,9 @@ def main():
         if args.pause < 0.0 or args.pause > 30.0:
             parser.error("--pause must be between 0.0 and 30.0 seconds")
 
-    # Load API key and initialize client
-    api_key = load_api_key(args)
-    client = ElevenLabs(api_key=api_key)
+    # Load API key and URL, then initialize client
+    api_key, api_url = load_api_key_and_url(args)
+    client = ElevenLabs(api_key=api_key, base_url=api_url)
 
     # Check credits if requested
     if args.credits:
