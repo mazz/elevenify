@@ -5,6 +5,8 @@ import re
 from elevenlabs.client import ElevenLabs
 from elevenlabs import Voice, VoiceSettings
 from dotenv import load_dotenv
+from pydub import AudioSegment
+import io
 
 def load_api_key(args):
     """Load ElevenLabs API key from .env file or command-line argument."""
@@ -123,13 +125,20 @@ def slugify(text):
 def get_unique_filename(voice_name, khz_rate, bit_rate, extension, prefix=None, start_sample_number=None, end_sample_number=None):
     """Generate unique filename with optional prefix and sample number range."""
     voice_name = re.sub(r'[^a-zA-Z0-9\s]', '_', voice_name)
-    index = 0
-    while True:
+    max_attempts = 1000  # Prevent infinite loops
+    for index in range(max_attempts):
         if start_sample_number is not None and end_sample_number is not None:
+            # Non-split mode with range
             base = f"{start_sample_number:05d}-{end_sample_number:05d}-{voice_name}-{khz_rate:.2f}-{bit_rate}"
+            if index > 0:
+                base += f"-{index:05d}"
         elif start_sample_number is not None:
+            # Split mode
             base = f"{start_sample_number:05d}-{voice_name}-{khz_rate:.2f}-{bit_rate}"
+            if index > 0:
+                base += f"-{index:05d}"
         else:
+            # Direct text input
             base = f"{voice_name}-{khz_rate:.2f}-{bit_rate}-{index:05d}"
         if prefix:
             base = f"{prefix}-{base}"
@@ -137,31 +146,49 @@ def get_unique_filename(voice_name, khz_rate, bit_rate, extension, prefix=None, 
         filename = slugify(filename)
         if not os.path.exists(filename):
             return filename
-        # Increment index to handle collisions
-        index += 1
-        if start_sample_number is not None and end_sample_number is not None:
-            base = f"{start_sample_number:05d}-{end_sample_number:05d}-{voice_name}-{khz_rate:.2f}-{bit_rate}-{index:05d}"
-        elif start_sample_number is not None:
-            base = f"{start_sample_number:05d}-{voice_name}-{khz_rate:.2f}-{bit_rate}-{index:05d}"
-        if prefix:
-            base = f"{prefix}-{base}"
-        filename = f"{base}.{extension}"
-        filename = slugify(filename)
+    raise ValueError(f"Could not generate unique filename after {max_attempts} attempts")
 
-def process_text_to_audio(client, text, voice_id, voice_name, model, audio_type, rate, prefix=None, start_sample_number=None, end_sample_number=None):
-    """Convert text to audio using ElevenLabs API with custom filename."""
+def process_text_to_audio(client, text, voice_id, voice_name, model, audio_type, rate, prefix=None, start_sample_number=None, end_sample_number=None, pause=None, lines=None):
+    """Convert text to audio using ElevenLabs API with custom filename, adding pauses between lines if specified."""
     try:
         output_format, khz_rate, bit_rate, extension = get_output_format(audio_type, rate)
         output_file = get_unique_filename(voice_name, khz_rate, bit_rate, extension, prefix, start_sample_number, end_sample_number)
-        audio = client.generate(
-            text=text,
-            voice=voice_id,
-            model=model,
-            output_format=output_format
-        )
-        with open(output_file, "wb") as f:
-            for chunk in audio:
-                f.write(chunk)
+        
+        if pause is not None and lines and len(lines) > 1:
+            # Generate audio for each line and concatenate with silence
+            audio_segments = []
+            for line in lines:
+                audio = client.generate(
+                    text=line,
+                    voice=voice_id,
+                    model=model,
+                    output_format=output_format
+                )
+                # Convert audio stream to AudioSegment
+                audio_data = b''.join(audio)
+                audio_segment = AudioSegment.from_file(io.BytesIO(audio_data), format='mp3')
+                audio_segments.append(audio_segment)
+            
+            # Combine segments with silence
+            combined_audio = audio_segments[0]
+            silence = AudioSegment.silent(duration=int(pause * 1000))  # Pause in milliseconds
+            for segment in audio_segments[1:]:
+                combined_audio += silence + segment
+            
+            # Export combined audio
+            combined_audio.export(output_file, format=extension, bitrate=f"{bit_rate}k")
+        else:
+            # Single API call for no pause or single line
+            audio = client.generate(
+                text=text,
+                voice=voice_id,
+                model=model,
+                output_format=output_format
+            )
+            with open(output_file, "wb") as f:
+                for chunk in audio:
+                    f.write(chunk)
+        
         print(f"Generated audio file: {output_file}")
     except Exception as e:
         print(f"Error generating audio: {str(e)}")
@@ -228,10 +255,11 @@ def main():
     parser.add_argument("--key", "-k", help="ElevenLabs API key")
     parser.add_argument("--list", "-l", action="store_true", help="List available voices")
     parser.add_argument("--credits", "-c", action="store_true", help="Show remaining character credits")
+    parser.add_argument("--pause", type=float, help="Pause duration in seconds between lines in non-split mode (requires --file, not --split, 0.0 to 30.0)")
     
     args = parser.parse_args()
 
-    # Validate start-line, last-line, and estimate-credits
+    # Validate start-line, last-line, estimate-credits, and pause
     if args.start_line < 1:
         parser.error("--start-line must be a positive integer")
     if args.start_line > 1 and not args.file:
@@ -245,6 +273,13 @@ def main():
             parser.error("--last-line must be a positive integer")
     if args.estimate_credits and not args.file:
         parser.error("--estimate-credits requires --file")
+    if args.pause is not None:
+        if not args.file:
+            parser.error("--pause requires --file")
+        if args.split:
+            parser.error("--pause cannot be used with --split")
+        if args.pause < 0.0 or args.pause > 30.0:
+            parser.error("--pause must be between 0.0 and 30.0 seconds")
 
     # Load API key and initialize client
     api_key = load_api_key(args)
@@ -344,8 +379,12 @@ def main():
                 non_comment_lines.append(line)
             
             if non_comment_lines:
-                combined_text = ' '.join(non_comment_lines)
-                process_text_to_audio(client, combined_text, voice_id, voice_name, args.model, args.type, args.rate, prefix, first_sample_number, last_sample_number)
+                # Use pydub for pause if specified, otherwise join with space
+                if args.pause is not None and len(non_comment_lines) > 1:
+                    process_text_to_audio(client, None, voice_id, voice_name, args.model, args.type, args.rate, prefix, first_sample_number, last_sample_number, pause=args.pause, lines=non_comment_lines)
+                else:
+                    combined_text = ' '.join(non_comment_lines)
+                    process_text_to_audio(client, combined_text, voice_id, voice_name, args.model, args.type, args.rate, prefix, first_sample_number, last_sample_number)
             else:
                 print("No non-comment lines to process in the specified line range.")
     else:
