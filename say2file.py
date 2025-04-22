@@ -35,23 +35,27 @@ def check_credits(client):
     except Exception as e:
         print(f"Error fetching credits: {str(e)}")
 
-def split_text(text):
-    """Split text into segments with sequential sample numbers, skipping comment lines."""
+def split_text(text, start_line):
+    """Split text into segments with sequential sample numbers, skipping comment lines and lines before start_line."""
     # Split on newlines and track sample numbers
     lines = text.strip().split('\n')
     segments = []
     sample_number = 0
+    line_number = 0
     for line in lines:
+        line_number += 1
         line = line.strip()
         if not line or line.startswith('#'):
             continue
         sample_number += 1
+        if line_number < start_line:
+            continue
         segments.append((sample_number, line))
     # If no segments, try sentence splitting on non-comment text
     if not segments:
-        non_comment_text = '\n'.join(line for line in lines if line.strip() and not line.strip().startswith('#'))
+        non_comment_text = '\n'.join(line for i, line in enumerate(lines, 1) if i >= start_line and line.strip() and not line.strip().startswith('#'))
         sentences = re.split(r'(?<=[.!?])\s+', non_comment_text.strip())
-        segments = [(i + 1, s) for i, s in enumerate(sentences) if s.strip()]
+        segments = [(sample_number + i + 1, s) for i, s in enumerate(sentences) if s.strip()]
     return segments
 
 def slugify(text):
@@ -159,6 +163,7 @@ def main():
     parser.add_argument("text", nargs="?", help="Text to convert to audio")
     parser.add_argument("--file", "-f", help="Input text file")
     parser.add_argument("--split", "-s", action="store_true", help="Split input text file into multiple output files")
+    parser.add_argument("--start-line", type=int, default=1, help="Line number to start processing from (requires --file)")
     parser.add_argument("--voice", "-w", default="Adam", help="Voice name or ID (default: Adam)")
     parser.add_argument("--model", "-m", default="eleven_multilingual_v2", 
                        choices=["eleven_monolingual_v1", "eleven_multilingual_v1", "eleven_multilingual_v2", "eleven_turbo_v2"], 
@@ -174,6 +179,12 @@ def main():
     parser.add_argument("--credits", "-c", action="store_true", help="Show remaining character credits")
     
     args = parser.parse_args()
+
+    # Validate start-line
+    if args.start_line < 1:
+        parser.error("--start-line must be a positive integer")
+    if args.start_line > 1 and not args.file:
+        parser.error("--start-line requires --file")
 
     # Load API key and initialize client
     api_key = load_api_key(args)
@@ -214,19 +225,25 @@ def main():
         with open(args.file, 'r', encoding='utf-8') as f:
             text = f.read()
         
+        # Validate start-line against file size
+        line_count = len(text.strip().split('\n'))
+        if args.start_line > line_count:
+            print(f"Error: --start-line {args.start_line} exceeds file line count ({line_count})")
+            return
+
         if args.split:
-            segments = split_text(text)
+            segments = split_text(text, args.start_line)
             for sample_number, sentence in segments:
                 process_text_to_audio(client, sentence, voice_id, voice_name, args.model, args.type, args.rate, prefix, sample_number)
         else:
-            # Filter out comment lines for non-split mode
+            # Filter out comment lines and lines before start_line for non-split mode
             lines = text.strip().split('\n')
-            non_comment_lines = [line for line in lines if line.strip() and not line.strip().startswith('#')]
+            non_comment_lines = [line for i, line in enumerate(lines, 1) if i >= args.start_line and line.strip() and not line.strip().startswith('#')]
             if non_comment_lines:
                 combined_text = ' '.join(non_comment_lines)
                 process_text_to_audio(client, combined_text, voice_id, voice_name, args.model, args.type, args.rate, prefix)
             else:
-                print("No non-comment lines to process in the file.")
+                print("No non-comment lines to process from the specified start line.")
     else:
         process_text_to_audio(client, args.text, voice_id, voice_name, args.model, args.type, args.rate)
 
