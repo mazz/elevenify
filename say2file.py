@@ -35,9 +35,64 @@ def check_credits(client):
     except Exception as e:
         print(f"Error fetching credits: {str(e)}")
 
+def get_model_credit_cost(model):
+    """Return the credit cost per character for the specified model."""
+    if model == "eleven_turbo_v2":
+        return 0.5
+    return 1.0
+
+def estimate_convertible_lines(client, text, start_line, model):
+    """Estimate lines convertible with remaining credits and for the full file."""
+    try:
+        subscription = client.user.get_subscription()
+        credits_remaining = subscription.character_limit - subscription.character_count
+        credit_cost = get_model_credit_cost(model)
+        
+        lines = text.strip().split('\n')
+        line_count = 0
+        total_chars = 0
+        total_credits = 0
+        full_file_lines = 0
+        full_file_chars = 0
+        full_file_credits = 0
+        line_number = 0
+        
+        for line in lines:
+            line_number += 1
+            if line_number < start_line:
+                continue
+            # Strip trailing comments and whitespace
+            line = line.split('#', 1)[0].strip()
+            if not line:
+                continue
+            chars = len(line)
+            line_credits = chars * credit_cost
+            # Full file estimate
+            full_file_lines += 1
+            full_file_chars += chars
+            full_file_credits += line_credits
+            # Current credits estimate
+            if total_credits + line_credits <= credits_remaining:
+                line_count += 1
+                total_chars += chars
+                total_credits += line_credits
+        
+        return {
+            'credits_remaining': credits_remaining,
+            'credit_cost': credit_cost,
+            'lines': line_count,
+            'characters': total_chars,
+            'credits_required': total_credits,
+            'full_file_lines': full_file_lines,
+            'full_file_characters': full_file_chars,
+            'full_file_credits': full_file_credits
+        }
+    except Exception as e:
+        print(f"Error estimating credits: {str(e)}")
+        return None
+
 def split_text(text, start_line):
     """Split text into segments with sequential sample numbers, skipping comment lines and stripping trailing comments."""
-    # Split on newlines and track sample numbers
     lines = text.strip().split('\n')
     segments = []
     sample_number = 0
@@ -48,10 +103,9 @@ def split_text(text, start_line):
         line = line.split('#', 1)[0].strip()
         if not line:
             continue
-        if line_number < start_line:
-            sample_number += 1
-            continue
         sample_number += 1
+        if line_number < start_line:
+            continue
         segments.append((sample_number, line))
     # If no segments, try sentence splitting on non-comment text
     if not segments:
@@ -62,35 +116,28 @@ def split_text(text, start_line):
 
 def slugify(text):
     """Normalize text to a URL-friendly slug."""
-    # Convert to lowercase, replace non-alphanumeric (except hyphens and dots) with hyphen
     slug = re.sub(r'[^a-z0-9.-]', '-', text.lower())
-    # Replace multiple hyphens with a single hyphen
     slug = re.sub(r'-+', '-', slug)
-    # Remove leading/trailing hyphens
     return slug.strip('-')
 
 def get_unique_filename(voice_name, khz_rate, bit_rate, extension, prefix=None, sample_number=None):
     """Generate unique filename with optional prefix and sample number."""
-    voice_name = re.sub(r'[^a-zA-Z0-9\s]', '_', voice_name)  # Sanitize voice name
+    voice_name = re.sub(r'[^a-zA-Z0-9\s]', '_', voice_name)
     index = 0
     while True:
-        # Construct base filename
         if sample_number is not None:
             base = f"{sample_number:05d}-{voice_name}-{khz_rate:.2f}-{bit_rate}"
         else:
             base = f"{voice_name}-{khz_rate:.2f}-{bit_rate}-{index:05d}"
-        # Add prefix if provided
         if prefix:
             base = f"{prefix}-{base}"
         filename = f"{base}.{extension}"
         filename = slugify(filename)
         if not os.path.exists(filename):
             return filename
-        # Only increment index if no sample number (for non-split or direct text)
         if sample_number is None:
             index += 1
         else:
-            # For split with sample number, append index for existing files
             base = f"{base}-{index:05d}"
             filename = f"{base}.{extension}"
             filename = slugify(filename)
@@ -109,7 +156,6 @@ def process_text_to_audio(client, text, voice_id, voice_name, model, audio_type,
             model=model,
             output_format=output_format
         )
-        # Save the audio stream to file
         with open(output_file, "wb") as f:
             for chunk in audio:
                 f.write(chunk)
@@ -119,9 +165,7 @@ def process_text_to_audio(client, text, voice_id, voice_name, model, audio_type,
 
 def get_file_prefix(filename):
     """Extract and slugify filename prefix, truncated to 10 characters."""
-    # Get filename without extension
     base = os.path.splitext(os.path.basename(filename))[0]
-    # Slugify and truncate
     slug = slugify(base)
     return slug[:10]
 
@@ -137,7 +181,7 @@ def get_output_format(audio_type, rate):
         },
         'pcm': {
             8000: ('pcm_8000', 8.0, 8000, 'wav'),
-            16000: ('pcm_16000', 16.0, 16000, 'wav'),
+            16000: ('pcm_16000', 16.0, 16, 'wav'),
             22050: ('pcm_22050', 22.05, 22050, 'wav'),
             24000: ('pcm_24000', 24.0, 24000, 'wav'),
             44100: ('pcm_44100', 44.1, 44100, 'wav')
@@ -166,6 +210,7 @@ def main():
     parser.add_argument("--file", "-f", help="Input text file")
     parser.add_argument("--split", "-s", action="store_true", help="Split input text file into multiple output files")
     parser.add_argument("--start-line", type=int, default=1, help="Line number to start processing from (requires --file)")
+    parser.add_argument("--estimate-credits", action="store_true", help="Estimate lines convertible with remaining credits (requires --file)")
     parser.add_argument("--voice", "-w", default="Adam", help="Voice name or ID (default: Adam)")
     parser.add_argument("--model", "-m", default="eleven_multilingual_v2", 
                        choices=["eleven_monolingual_v1", "eleven_multilingual_v1", "eleven_multilingual_v2", "eleven_turbo_v2"], 
@@ -182,11 +227,13 @@ def main():
     
     args = parser.parse_args()
 
-    # Validate start-line
+    # Validate start-line and estimate-credits
     if args.start_line < 1:
         parser.error("--start-line must be a positive integer")
     if args.start_line > 1 and not args.file:
         parser.error("--start-line requires --file")
+    if args.estimate_credits and not args.file:
+        parser.error("--estimate-credits requires --file")
 
     # Load API key and initialize client
     api_key = load_api_key(args)
@@ -231,6 +278,20 @@ def main():
         line_count = len(text.strip().split('\n'))
         if args.start_line > line_count:
             print(f"Error: --start-line {args.start_line} exceeds file line count ({line_count})")
+            return
+
+        if args.estimate_credits:
+            result = estimate_convertible_lines(client, text, args.start_line, args.model)
+            if result:
+                print(f"Remaining credits: {result['credits_remaining']:,}")
+                print(f"Model: {args.model} ({result['credit_cost']} credits per character)")
+                print(f"Lines that can be converted with current credits: {result['lines']}")
+                print(f"Characters for convertible lines: {result['characters']:,}")
+                print(f"Credits required for convertible lines: {result['credits_required']:,}")
+                print(f"Full file estimate{' (from line ' + str(args.start_line) + ')' if args.start_line > 1 else ''}:")
+                print(f"  Total lines: {result['full_file_lines']}")
+                print(f"  Total characters: {result['full_file_characters']:,}")
+                print(f"  Total credits required: {result['full_file_credits']:,}")
             return
 
         if args.split:
