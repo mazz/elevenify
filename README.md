@@ -184,72 +184,13 @@ after comment
 Feel free to submit issues or pull requests for enhancements like additional audio formats, performance optimizations, or GUI wrappers.
 
 ## License
-
 MIT License. See [LICENSE](LICENSE) for details.
-Instructions for Use
-Copy the Content: Select and copy the text within the code block (everything between text and ). This is the raw Markdown with backticks () and asterisks (*) escaped (e.g., \ for `, ** for **) to prevent rendering.
-Replace Escaped Characters:
-After pasting into a text editor, replace:
-\ with (e.g., \elevenify.py` becomes elevenify.py).
-** with ** (e.g., **Text-to-Audio** becomes Text-to-Audio).
-You can use a text editor’s find-and-replace:
-Find: \ Replace: `
-Find: ** Replace: **
-This restores the original Markdown syntax.
-Save as README.md: Save the edited text as README.md in your Elevenify directory:
-text
 
+```
 Elevenify/
 ├── elevenify.py
 ├── README.md
 ├── requirements.txt
 ├── .env-example
 ├── sample.txt
-Verify: Open README.md in a text editor or Markdown viewer (e.g., GitHub, VS Code) to confirm it renders correctly (e.g., headers, code blocks, lists).
-Alternative Delivery Method
-If copying from the web interface is still problematic (e.g., rendering persists or selection is difficult), I can provide the README.md as a downloadable file:
-
-Artifact Reference: I’ll create a new artifact for README.md as a standalone file.
-Access: You can request a direct download link or have me provide the file content in a format compatible with your workflow (e.g., a zip archive of the Elevenify directory).
-Here’s the standalone artifact for README.md:
-
-[Content identical to the plain text above, available for download if needed]
-
-Show in sidebar
-To access this, let me know if you need a specific download method (e.g., a URL, email attachment, or file-sharing service), and I’ll coordinate with xAI to provide it.
-
-Notes
-Content: The README.md is identical to the last response, including LABSURL, sample.txt examples, and kjv.txt use case (e.g., Revelation 22:20–21). It aligns with your April 21, 2025, work on uttered.py for audio analysis.
-Escaping: Backticks and asterisks are escaped to prevent the web interface from rendering them. The replacement step ensures the original Markdown is restored.
-Web Interface Issue: The Grok interface’s automatic Markdown rendering is the root cause. The code block and escaping should mitigate this, but the alternative download option is available if needed.
-Distribution: The Elevenify distribution remains complete with elevenify.py, requirements.txt, .env-example, and sample.txt.
-Testing
-Test with sample.txt:
-
-bash
-
-python elevenify.py --file sample.txt --model eleven_turbo_v2 --start-line 1 --last-line 2 --pause 10 --voice TJIZFyULEXGaeHXEFtw7
-Expected: sample-00001-00002-knightley-dapper-and-deep-narrator-44.10-128.mp3.
-
-Test with kjv.txt:
-
-bash
-
-python elevenify.py --file kjv.txt --model eleven_turbo_v2 --start-line 31101 --pause 10 --voice TJIZFyULEXGaeHXEFtw7
-Expected: kjv-31101-31102-knightley-dapper-and-deep-narrator-44.10-128.mp3.
-
-Test LABSURL:
-
-Edit .env:
-text
-
-LABSURL=https://api.elevenlabs.io
-LABSKEY=your_elevenlabs_api_key
-Run:
-bash
-
-python elevenify.py --file sample.txt --model eleven_turbo_v2 --start-line 1 --voice TJIZFyULEXGaeHXEFtw7
-Relevant Memories
-Your April 21, 2025, conversation about uttered.py and audio analysis (e.g., word start times in spoken-word audio) informs the README.md examples, which support your Bible verse audio use case with kjv.txt and sample.txt.
-
-If you still can’t copy the text cleanly (e.g., rendering persists, selection issues), or if you prefer the downloadable file, additional files (e.g., LICENSE), or modifications (e.g., command-line --url), please provide details about the issue (e.g., browser, specific rendering behavior) or your preferred delivery method. I’ll provide a solution with appropriate artifact_id values, such as a zip archive or direct file link.
+```
