@@ -41,8 +41,8 @@ def get_model_credit_cost(model):
         return 0.5
     return 1.0
 
-def estimate_convertible_lines(client, text, start_line, model):
-    """Estimate lines convertible with remaining credits and for the full file."""
+def estimate_convertible_lines(client, text, start_line, last_line, model):
+    """Estimate lines convertible with remaining credits and for the full file within the specified range."""
     try:
         subscription = client.user.get_subscription()
         credits_remaining = subscription.character_limit - subscription.character_count
@@ -59,7 +59,7 @@ def estimate_convertible_lines(client, text, start_line, model):
         
         for line in lines:
             line_number += 1
-            if line_number < start_line:
+            if line_number < start_line or line_number > last_line:
                 continue
             # Strip trailing comments and whitespace
             line = line.split('#', 1)[0].strip()
@@ -91,8 +91,8 @@ def estimate_convertible_lines(client, text, start_line, model):
         print(f"Error estimating credits: {str(e)}")
         return None
 
-def split_text(text, start_line):
-    """Split text into segments with sequential sample numbers, skipping comment lines and stripping trailing comments."""
+def split_text(text, start_line, last_line):
+    """Split text into segments with sequential sample numbers, skipping comment lines and stripping trailing comments within the specified range."""
     lines = text.strip().split('\n')
     segments = []
     sample_number = 0
@@ -104,12 +104,12 @@ def split_text(text, start_line):
         if not line:
             continue
         sample_number += 1
-        if line_number < start_line:
+        if line_number < start_line or line_number > last_line:
             continue
         segments.append((sample_number, line))
     # If no segments, try sentence splitting on non-comment text
     if not segments:
-        non_comment_text = '\n'.join(line.split('#', 1)[0].strip() for i, line in enumerate(lines, 1) if i >= start_line and line.split('#', 1)[0].strip())
+        non_comment_text = '\n'.join(line.split('#', 1)[0].strip() for i, line in enumerate(lines, 1) if i >= start_line and i <= last_line and line.split('#', 1)[0].strip())
         sentences = re.split(r'(?<=[.!?])\s+', non_comment_text.strip())
         segments = [(sample_number + i + 1, s) for i, s in enumerate(sentences) if s.strip()]
     return segments
@@ -120,13 +120,15 @@ def slugify(text):
     slug = re.sub(r'-+', '-', slug)
     return slug.strip('-')
 
-def get_unique_filename(voice_name, khz_rate, bit_rate, extension, prefix=None, sample_number=None):
-    """Generate unique filename with optional prefix and sample number."""
+def get_unique_filename(voice_name, khz_rate, bit_rate, extension, prefix=None, start_sample_number=None, end_sample_number=None):
+    """Generate unique filename with optional prefix and sample number range."""
     voice_name = re.sub(r'[^a-zA-Z0-9\s]', '_', voice_name)
     index = 0
     while True:
-        if sample_number is not None:
-            base = f"{sample_number:05d}-{voice_name}-{khz_rate:.2f}-{bit_rate}"
+        if start_sample_number is not None and end_sample_number is not None:
+            base = f"{start_sample_number:05d}-{end_sample_number:05d}-{voice_name}-{khz_rate:.2f}-{bit_rate}"
+        elif start_sample_number is not None:
+            base = f"{start_sample_number:05d}-{voice_name}-{khz_rate:.2f}-{bit_rate}"
         else:
             base = f"{voice_name}-{khz_rate:.2f}-{bit_rate}-{index:05d}"
         if prefix:
@@ -135,21 +137,22 @@ def get_unique_filename(voice_name, khz_rate, bit_rate, extension, prefix=None, 
         filename = slugify(filename)
         if not os.path.exists(filename):
             return filename
-        if sample_number is None:
-            index += 1
-        else:
-            base = f"{base}-{index:05d}"
-            filename = f"{base}.{extension}"
-            filename = slugify(filename)
-            if not os.path.exists(filename):
-                return filename
-            index += 1
+        # Increment index to handle collisions
+        index += 1
+        if start_sample_number is not None and end_sample_number is not None:
+            base = f"{start_sample_number:05d}-{end_sample_number:05d}-{voice_name}-{khz_rate:.2f}-{bit_rate}-{index:05d}"
+        elif start_sample_number is not None:
+            base = f"{start_sample_number:05d}-{voice_name}-{khz_rate:.2f}-{bit_rate}-{index:05d}"
+        if prefix:
+            base = f"{prefix}-{base}"
+        filename = f"{base}.{extension}"
+        filename = slugify(filename)
 
-def process_text_to_audio(client, text, voice_id, voice_name, model, audio_type, rate, prefix=None, sample_number=None):
+def process_text_to_audio(client, text, voice_id, voice_name, model, audio_type, rate, prefix=None, start_sample_number=None, end_sample_number=None):
     """Convert text to audio using ElevenLabs API with custom filename."""
     try:
         output_format, khz_rate, bit_rate, extension = get_output_format(audio_type, rate)
-        output_file = get_unique_filename(voice_name, khz_rate, bit_rate, extension, prefix, sample_number)
+        output_file = get_unique_filename(voice_name, khz_rate, bit_rate, extension, prefix, start_sample_number, end_sample_number)
         audio = client.generate(
             text=text,
             voice=voice_id,
@@ -181,7 +184,7 @@ def get_output_format(audio_type, rate):
         },
         'pcm': {
             8000: ('pcm_8000', 8.0, 8000, 'wav'),
-            16000: ('pcm_16000', 16.0, 16, 'wav'),
+            16000: ('pcm_16000', 16.0, 16000, 'wav'),
             22050: ('pcm_22050', 22.05, 22050, 'wav'),
             24000: ('pcm_24000', 24.0, 24000, 'wav'),
             44100: ('pcm_44100', 44.1, 44100, 'wav')
@@ -210,6 +213,7 @@ def main():
     parser.add_argument("--file", "-f", help="Input text file")
     parser.add_argument("--split", "-s", action="store_true", help="Split input text file into multiple output files")
     parser.add_argument("--start-line", type=int, default=1, help="Line number to start processing from (requires --file)")
+    parser.add_argument("--last-line", type=int, help="Last line number to process (requires --file)")
     parser.add_argument("--estimate-credits", action="store_true", help="Estimate lines convertible with remaining credits (requires --file)")
     parser.add_argument("--voice", "-w", default="Adam", help="Voice name or ID (default: Adam)")
     parser.add_argument("--model", "-m", default="eleven_multilingual_v2", 
@@ -227,11 +231,18 @@ def main():
     
     args = parser.parse_args()
 
-    # Validate start-line and estimate-credits
+    # Validate start-line, last-line, and estimate-credits
     if args.start_line < 1:
         parser.error("--start-line must be a positive integer")
     if args.start_line > 1 and not args.file:
         parser.error("--start-line requires --file")
+    if args.last_line is not None:
+        if not args.file:
+            parser.error("--last-line requires --file")
+        if args.last_line < args.start_line:
+            parser.error("--last-line must not be less than --start-line")
+        if args.last_line < 1:
+            parser.error("--last-line must be a positive integer")
     if args.estimate_credits and not args.file:
         parser.error("--estimate-credits requires --file")
 
@@ -274,39 +285,69 @@ def main():
         with open(args.file, 'r', encoding='utf-8') as f:
             text = f.read()
         
-        # Validate start-line against file size
+        # Validate start-line and last-line against file size
         line_count = len(text.strip().split('\n'))
         if args.start_line > line_count:
             print(f"Error: --start-line {args.start_line} exceeds file line count ({line_count})")
             return
+        if args.last_line is not None and args.last_line > line_count:
+            print(f"Error: --last-line {args.last_line} exceeds file line count ({line_count})")
+            return
+
+        # Set last_line to end of file if not specified
+        last_line = args.last_line if args.last_line is not None else line_count
 
         if args.estimate_credits:
-            result = estimate_convertible_lines(client, text, args.start_line, args.model)
+            result = estimate_convertible_lines(client, text, args.start_line, last_line, args.model)
             if result:
                 print(f"Remaining credits: {result['credits_remaining']:,}")
                 print(f"Model: {args.model} ({result['credit_cost']} credits per character)")
                 print(f"Lines that can be converted with current credits: {result['lines']}")
                 print(f"Characters for convertible lines: {result['characters']:,}")
                 print(f"Credits required for convertible lines: {result['credits_required']:,}")
-                print(f"Full file estimate{' (from line ' + str(args.start_line) + ')' if args.start_line > 1 else ''}:")
+                estimate_label = "Full file estimate"
+                if args.start_line > 1 or args.last_line is not None:
+                    estimate_label += f" (from line {args.start_line}"
+                    if args.last_line is not None:
+                        estimate_label += f" to line {args.last_line}"
+                    estimate_label += ")"
+                print(f"{estimate_label}:")
                 print(f"  Total lines: {result['full_file_lines']}")
                 print(f"  Total characters: {result['full_file_characters']:,}")
                 print(f"  Total credits required: {result['full_file_credits']:,}")
             return
 
         if args.split:
-            segments = split_text(text, args.start_line)
+            segments = split_text(text, args.start_line, last_line)
             for sample_number, sentence in segments:
-                process_text_to_audio(client, sentence, voice_id, voice_name, args.model, args.type, args.rate, prefix, sample_number)
+                process_text_to_audio(client, sentence, voice_id, voice_name, args.model, args.type, args.rate, prefix, start_sample_number=sample_number)
         else:
-            # Filter out comment lines and lines before start_line for non-split mode
+            # Filter out comment lines and lines outside start_line to last_line for non-split mode
             lines = text.strip().split('\n')
-            non_comment_lines = [line.split('#', 1)[0].strip() for i, line in enumerate(lines, 1) if i >= args.start_line and line.split('#', 1)[0].strip()]
+            non_comment_lines = []
+            sample_number = 0
+            first_sample_number = None
+            last_sample_number = None
+            line_number = 0
+            for line in lines:
+                line_number += 1
+                # Strip trailing comments
+                line = line.split('#', 1)[0].strip()
+                if not line:
+                    continue
+                sample_number += 1
+                if line_number < args.start_line or line_number > last_line:
+                    continue
+                if first_sample_number is None:
+                    first_sample_number = sample_number
+                last_sample_number = sample_number
+                non_comment_lines.append(line)
+            
             if non_comment_lines:
                 combined_text = ' '.join(non_comment_lines)
-                process_text_to_audio(client, combined_text, voice_id, voice_name, args.model, args.type, args.rate, prefix)
+                process_text_to_audio(client, combined_text, voice_id, voice_name, args.model, args.type, args.rate, prefix, first_sample_number, last_sample_number)
             else:
-                print("No non-comment lines to process from the specified start line.")
+                print("No non-comment lines to process in the specified line range.")
     else:
         process_text_to_audio(client, args.text, voice_id, voice_name, args.model, args.type, args.rate)
 
