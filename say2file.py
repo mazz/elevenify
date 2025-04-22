@@ -36,7 +36,7 @@ def check_credits(client):
         print(f"Error fetching credits: {str(e)}")
 
 def split_text(text, start_line):
-    """Split text into segments with sequential sample numbers, skipping comment lines and lines before start_line."""
+    """Split text into segments with sequential sample numbers, skipping comment lines and stripping trailing comments."""
     # Split on newlines and track sample numbers
     lines = text.strip().split('\n')
     segments = []
@@ -44,16 +44,18 @@ def split_text(text, start_line):
     line_number = 0
     for line in lines:
         line_number += 1
-        line = line.strip()
-        if not line or line.startswith('#'):
+        # Strip trailing comments
+        line = line.split('#', 1)[0].strip()
+        if not line:
+            continue
+        if line_number < start_line:
+            sample_number += 1
             continue
         sample_number += 1
-        if line_number < start_line:
-            continue
         segments.append((sample_number, line))
     # If no segments, try sentence splitting on non-comment text
     if not segments:
-        non_comment_text = '\n'.join(line for i, line in enumerate(lines, 1) if i >= start_line and line.strip() and not line.strip().startswith('#'))
+        non_comment_text = '\n'.join(line.split('#', 1)[0].strip() for i, line in enumerate(lines, 1) if i >= start_line and line.split('#', 1)[0].strip())
         sentences = re.split(r'(?<=[.!?])\s+', non_comment_text.strip())
         segments = [(sample_number + i + 1, s) for i, s in enumerate(sentences) if s.strip()]
     return segments
@@ -238,7 +240,7 @@ def main():
         else:
             # Filter out comment lines and lines before start_line for non-split mode
             lines = text.strip().split('\n')
-            non_comment_lines = [line for i, line in enumerate(lines, 1) if i >= args.start_line and line.strip() and not line.strip().startswith('#')]
+            non_comment_lines = [line.split('#', 1)[0].strip() for i, line in enumerate(lines, 1) if i >= args.start_line and line.split('#', 1)[0].strip()]
             if non_comment_lines:
                 combined_text = ' '.join(non_comment_lines)
                 process_text_to_audio(client, combined_text, voice_id, voice_name, args.model, args.type, args.rate, prefix)
